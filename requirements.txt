@@ -10,3 +10,4 @@ Flask-Cors
 sentence-transformers
 streamlit
 langchain-community
+pysqlite3-binary
