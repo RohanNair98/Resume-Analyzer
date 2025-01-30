@@ -11,3 +11,4 @@ sentence-transformers
 streamlit
 langchain-community
 pysqlite3-binary
+pdfplumber
