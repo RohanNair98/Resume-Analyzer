@@ -13,7 +13,7 @@ import requests
 import json
 
 # Configuration
-GROQ_API_KEY = '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'
+GROQ_API_KEY = ''
 MODEL_NAME = "llama-3.3-70b-versatile"
 PERSIST_DIRECTORY = 'db'
 
