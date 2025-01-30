@@ -6,9 +6,14 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.chains import ConversationalRetrievalChain
 from PyPDF2 import PdfReader
+from groq import Groq
+import re
+import pdfplumber
+import requests
+import json
 
 # Configuration
-GROQ_API_KEY = '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'
+GROQ_API_KEY = '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'
 MODEL_NAME = "llama-3.3-70b-versatile"
 PERSIST_DIRECTORY = 'db'
 
@@ -303,6 +308,158 @@ def display_custom_trigger_results(trigger_faqs):
             for faq in faqs:
                 st.markdown(f"- {faq}")
 
+
+def extract_key_info(data):
+    try:
+        prompt = f"""
+        Please extract the following information from the resume text below:
+
+        1. Full Name
+        2. Industry
+        3. Job Title
+        4. Current Location
+        5. Job Location
+        6. Education Details
+        7. Job Start Date
+        8. Job End Date (if applicable)
+        9. Skills
+        10. Interests
+        11. Experience
+        12. Current Company Name
+
+        Resume Text:
+        {data}
+
+        Provide ONLY the extracted information in the following JSON format without any gap or space and with no additional commentary or explanations:
+
+        {{
+            "full_name": "<extracted_full_name>",
+            "industry": "<extracted_industry>",
+            "job_title": "<extracted_job_title>",
+            "current_location": "<extracted_current_location>",
+            "job_location": "<extracted_job_location>",
+            "education": "<extracted_education_details>",
+            "job_start_date": "<extracted_job_start_date>",
+            "job_end_date": "<extracted_job_end_date>",
+            "skills": ["<skill_1>", "<skill_2>", ...],
+            "interests": ["<interest_1>", "<interest_2>", ...],
+            "experience": ["<experience_1>", "<experience_2>", ...],
+            "current_company": "<extracted_current_company>"
+        }}
+        """
+
+        client = Groq(api_key="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")
+
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            model="llama-3.3-70b-versatile"
+        )
+        message = chat_completion.choices[0].message.content
+        return message
+    except Exception as e:
+        return{
+            "error": f"An error occurred: {str(e)}"
+        }
+
+def compare_data(data1, data2):
+    try:
+        prompt = f"""
+        You are an advanced LLM tasked with verifying the correctness of information in data2 by comparing it with data1. For each field, check the accuracy of the information provided in data2 and calculate a percentage match.
+        Please do not generate your comments and explanations.
+        Provide an individual score for each field and an overall percentage score based on the following criteria:
+
+        1. **Full Name**: Check if the `full_name` fields in data1 and data2 match exactly (case-insensitive).
+        2. **Occupation**: Compare the `occupation` field in data1 with the `job_title` field in data2 using semantic similarity.
+        3. **Headline**: Compare the `headline` in data1 with any relevant title or description in data2 for semantic similarity.
+        4. **Country**: Verify if the `country_full_name` field in data1 matches the `current_location` or `job_location` field in data2.
+        5. **City**: Check if the `city` field in data1 is included in the `current_location` field in data2.
+        6. **State**: Verify if the `state` field in data1 matches any part of the `current_location` or `job_location` field in data2.
+        7. **Experiences**: Compare the `experiences` list in data1 with the `experience` list in data2 for similarity. Check company names, job titles, and descriptions.
+        8. **Education**: Compare the `education` fields in data1 and data2, including degree name, field of study, school, and date ranges.
+        9. **Skills**: Calculate the percentage overlap between the `skills` lists in data1 and data2.
+
+        Use the following weights for the overall trueness score:
+        - Full Name: 10%
+        - Occupation: 10%
+        - Headline: 10%
+        - Country: 10%
+        - City: 5%
+        - State: 5%
+        - Experiences: 30%
+        - Education: 10%
+        - Skills: 10%
+
+        Provide the response in the following JSON format:
+        {{
+            "full_name_match_percentage": <value>,
+            "occupation_match_percentage": <value>,
+            "headline_match_percentage": <value>,
+            "country_match_percentage": <value>,
+            "city_match_percentage": <value>,
+            "state_match_percentage": <value>,
+            "experiences_match_percentage": <value>,
+            "education_match_percentage": <value>,
+            "skills_match_percentage": <value>,
+            "overall_trueness_percentage": <value>
+        }}
+
+        Use the data below:
+        data1:
+        {data1}
+
+        data2:
+        {data2}
+        """
+
+        client = Groq(api_key="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")
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            model="llama-3.3-70b-versatile"
+        )
+
+        message = chat_completion.choices[0].message.content
+        return message
+    except Exception as e:
+        return {
+            "error": f"An error occurred: {str(e)}"
+        }
+
+def extract_data(data, keys):
+    def recursive_extract(data, key, path=""):
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if k == key:
+                    yield (path + k, v)
+                if isinstance(v, (dict, list)):
+                    yield from recursive_extract(v, key, path + k + ".")
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                yield from recursive_extract(item, key, path + f"[{i}].")
+
+    extracted = {}
+    for key in keys:
+        matches = list(recursive_extract(data, key))
+        extracted[key] = matches if len(matches) > 1 else (matches[0][1] if matches else None)
+
+    return extracted
+
+def extract_linkedin_url(text):
+    linkedin_pattern = r'https?://(?:www\.)?linkedin\.com/in/[\w-]+/?'
+    match = re.search(linkedin_pattern, text)
+    return match.group() if match else None
+
+
+
 # Streamlit UI
 st.title("Resume Parser and Analyzer")
 
@@ -352,6 +509,57 @@ with st.sidebar:
             else:
                 st.success(f"Added trigger '{trigger_name}'. Upload a CV to analyze.")
 
+if uploaded_file is not None:
+    with pdfplumber.open(uploaded_file) as pdf:
+       extracted_text = ''.join([page.extract_text() for page in pdf.pages])
+       linkedin_url = extract_linkedin_url(extracted_text)
+
+    if linkedin_url:
+        api_key = 'xrhZ_CIZWGPnTIdQwwSFVQ'
+        headers = {'Authorization': 'Bearer ' + api_key}
+        api_endpoint = 'https://nubela.co/proxycurl/api/v2/linkedin'
+        params = {
+            'linkedin_profile_url': linkedin_url,
+            'extra': 'include',
+            'github_profile_id': 'include',
+            'personal_contact_number': 'include',
+            'personal_email': 'include',
+            'inferred_salary': 'include',
+            'skills': 'include',
+            'use_cache': 'if-present',
+            'fallback_to_cache': 'on-error',
+        }
+        response = requests.get(api_endpoint,
+                                params=params,
+                                headers=headers)
+
+        if response.status_code == 200:
+                linkedin_data = response.json()
+                with open("linkedin_data.json", "w") as file:
+                    json.dump(linkedin_data, file, indent=4)
+
+        with open("linkedin_data.json", "r") as file:
+            linkedin_data = json.load(file)
+
+        keys = ["full_name", "occupation", "headline", "country_full_name", "city", "state", "experiences", "education", "skills"]
+        formatted_linkedin_data = extract_data(linkedin_data, keys)
+        formatted_resume_data = extract_key_info(extracted_text)
+
+        with open("formatted_linkedin.json", "w") as file:
+            json.dump(formatted_linkedin_data, file, indent=4)
+
+        with open("resume_data.json", 'w') as file:
+            json.dump(formatted_resume_data, file, indent=4)
+
+        with open("resume_data.json", "r") as file:
+            formatted_resume_data = json.load(file)
+        
+        with open("formatted_linkedin.json", "r") as file:
+            formatted_linkedin_data = json.load(file)
+        st.header("Comparison Of Resume and LinkedIn Data")
+        result = compare_data(formatted_linkedin_data, formatted_resume_data)
+        st.write("Trueness of the provided information: ",result)
+
 # Display common questions based on triggers
 st.sidebar.header("Trigger-Based Questions")
 display_common_questions()
@@ -393,6 +601,8 @@ if st.session_state.current_document:
 
 else:
     st.info("Please upload a resume and job description to begin analysis.")
+
+
 
 if __name__ == '__main__':
     os.makedirs(PERSIST_DIRECTORY, exist_ok=True)
